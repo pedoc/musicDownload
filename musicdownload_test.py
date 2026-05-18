@@ -668,12 +668,19 @@ class MusicDownloader(QMainWindow):
         menu.exec(self.results_table.mapToGlobal(pos))
 
     def download_current_row(self):
-        # 原样
+        # 获取当前行对应的 checkbox，并从 checkbox 上取得绑定的 song_info，
+        # 这样在表格排序后仍可保证下载顺序与可视顺序一致。
         if self.current_right_click_row < 0 or not self.music_client:
             return
-        if str(self.current_right_click_row) not in self.music_records:
+        cell_widget = self.results_table.cellWidget(self.current_right_click_row, 0)
+        if not cell_widget:
             return
-        song_info = self.music_records[str(self.current_right_click_row)]
+        checkbox = cell_widget.findChild(QCheckBox)
+        song_info = getattr(checkbox, "song_info", None) or self.music_records.get(
+            str(self.current_right_click_row)
+        )
+        if not song_info:
+            return
         song_name = song_info.get("song_name", "未知歌曲")
         singers = ", ".join(song_info.get("singers", []))
 
@@ -797,7 +804,10 @@ class MusicDownloader(QMainWindow):
                 # Checkbox
                 w = QWidget()
                 lay = QHBoxLayout(w)
-                lay.addWidget(QCheckBox())
+                checkbox = QCheckBox()
+                # attach song_info to checkbox so it stays with the widget when the table is sorted
+                checkbox.song_info = per_source_search_result
+                lay.addWidget(checkbox)
                 lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
                 lay.setContentsMargins(0, 0, 0, 0)
                 self.results_table.setCellWidget(row, 0, w)
@@ -916,8 +926,13 @@ class MusicDownloader(QMainWindow):
                 or (scope == "勾选" and is_checked)
                 or (scope == "未勾选" and not is_checked)
             ):
-                if str(row) in self.music_records:
-                    songs.append(self.music_records[str(row)])
+                # 首先尝试从 checkbox 获取绑定的 song_info（此对象随行排序移动），
+                # 否则退回到旧的 music_records 映射以保持兼容性。
+                song_info = getattr(checkbox, "song_info", None)
+                if not song_info and str(row) in self.music_records:
+                    song_info = self.music_records[str(row)]
+                if song_info:
+                    songs.append(song_info)
         return songs
 
     def on_search(self):
