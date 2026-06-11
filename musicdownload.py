@@ -4,7 +4,6 @@ import re
 import json
 import shutil
 import requests
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -216,45 +215,26 @@ class SearchThread(QThread):
                     self.finished.emit(results)
                 return
 
-            # 逐个音乐源并行搜索，支持进度反馈
+            # 逐个音乐源顺序搜索，每个源完成后发送进度信号
             sources = self.music_client.music_sources
             total = len(sources)
             all_results = {}
-            completed = 0
 
-            def search_single(source_name):
+            for idx, source_name in enumerate(sources):
                 if self.isInterruptionRequested():
-                    return source_name, []
-                source_client = self.music_client.music_clients[source_name]
-                results = source_client.search(
-                    keyword=self.keyword,
-                    num_threadings=self.music_client.clients_threadings.get(
-                        source_name, 5
-                    ),
-                    request_overrides=self.music_client.requests_overrides.get(
-                        source_name
-                    ),
-                    rule=self.music_client.search_rules.get(source_name),
-                )
-                return source_name, results
+                    return
 
-            max_workers = min(total, 10)
-            with ThreadPoolExecutor(max_workers=max_workers) as ex:
-                futures = {ex.submit(search_single, s): s for s in sources}
-                for future in as_completed(futures):
-                    if self.isInterruptionRequested():
-                        for f in futures:
-                            f.cancel()
-                        return
-                    try:
-                        source_name, results = future.result()
-                        all_results[source_name] = results
-                    except Exception:
-                        source_name = futures[future]
-                        all_results[source_name] = []
-                    completed += 1
-                    display_name = self.source_labels.get(source_name, source_name)
-                    self.progress.emit(display_name, completed, total)
+                display_name = self.source_labels.get(source_name, source_name)
+                self.progress.emit(display_name, idx, total)
+
+                try:
+                    source_client = self.music_client.music_clients[source_name]
+                    results = source_client.search(keyword=self.keyword)
+                    all_results[source_name] = results
+                except Exception:
+                    all_results[source_name] = []
+
+                self.progress.emit(display_name, idx + 1, total)
 
             if not self.isInterruptionRequested():
                 self.finished.emit(all_results)
