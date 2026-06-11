@@ -1,5 +1,6 @@
 /.musicdl_temp
 /build
 /dist
+/*.spec
 /已下载音乐/
 /.claude/

@@ -17,38 +17,36 @@
  
 </p>
 
-宇宙超级无敌音乐下载器，支持无损音乐文件下载、批量下载、一键下载，支持歌单下载。
+The Ultimate Music Downloader: Supports lossless audio downloads, batch downloading, one-click downloads, and playlist downloads.
 
-支持酷狗、酷我、QQ音乐、网易云、咪咕等主流音乐平台音乐搜索、下载。支持无损音乐文件下载。
+Enables music search and downloading from major streaming platforms—including Kugou, Kuwo, QQ Music, NetEase Cloud Music, Migu, and others—with full support for downloading lossless audio files.
 
+Based on the [musicdl](https://github.com/CharlesPikachu/musicdl) project, modified from the [musicdlgui.py](https://github.com/CharlesPikachu/musicdl/blob/master/examples/musicdlgui/musicdlgui.py) file, and then optimized the interface and functionality using AI tools.
 
-基于 [musicdl](https://github.com/CharlesPikachu/musicdl) 项目做的，基于 [musicdlgui.py](https://github.com/CharlesPikachu/musicdl/blob/master/examples/musicdlgui/musicdlgui.py) 文件修改的，然后用豆包Ai优化了一下界面和功能。
-
-
-### 软件截图:
+### Screenshots:
 
 <table align="center" border="0" cellpadding="10">
 
   <tr>
     <td align="center">
       <img src="images/1.png" width="350"><br>
-      <b>图片1</b>
+      <b>Image1</b>
     </td>
     <td align="center">
       <img src="images/2.png" width="350"><br>
-      <b>图片2</b>
+      <b>Image2</b>
     </td>
     <td align="center">
       <img src="images/3.png" width="350"><br>
-      <b>图片3</b>
+      <b>Image3</b>
     </td>
   </tr>
 </table>
 
-### 使用教程：
+### Run Example：
 
 ```bash
-# 需要用Python3.13
+# Using Python3.13
 git clone https://github.com/MrsEWE44/musicDownload.git
 cd musicDownload
 python -m venv gqb313
@@ -58,10 +56,10 @@ pip install -r requirements.txt
 python musicdownload.py 
 ```
 
-### 打包教程：
+### Run Release Example：
 
 ```
-# 需要用Python3.13
+# Using Python3.13
 git clone https://github.com/MrsEWE44/musicDownload.git
 cd musicDownload
 python -m venv gqb313
@@ -69,11 +67,10 @@ gqb313\Script\Activate.bat
 cd musicDownload
 pip install -r requirements.txt
 
-# 如果你是Windows系统，运行make_release.bat文件
+# If You Is Windows , Run make_release.bat
 .\make_release.bat
 
-# 如果你是Linux、MacOS系统，运行make_release.sh文件
+# If You Is Linux、MacOS , Run make_release.sh
 bash make_release.sh
 ```
-
 
