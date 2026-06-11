@@ -4,6 +4,7 @@ import re
 import json
 import shutil
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from PySide6.QtWidgets import (
     QApplication,
     QMainWindow,
@@ -196,23 +197,67 @@ class ImageDownloadTask(QRunnable):
 class SearchThread(QThread):
     finished = Signal(dict)
     error = Signal(str)
+    progress = Signal(str, int, int)  # (source_display_name, completed, total)
 
-    def __init__(self, music_client, keyword, search_type):
+    def __init__(self, music_client, keyword, search_type, source_labels=None):
         super().__init__()
         self.music_client = music_client
         self.keyword = keyword
         self.search_type = search_type
+        self.source_labels = source_labels or {}
 
     def run(self):
         try:
-            if self.search_type == "搜索歌曲":
-                results = self.music_client.search(keyword=self.keyword)
-            else:
+            if self.search_type != "搜索歌曲":
                 results = self.music_client.parseplaylist(self.keyword)
                 if not isinstance(results, dict):
                     results = {"歌单": results}
+                if not self.isInterruptionRequested():
+                    self.finished.emit(results)
+                return
+
+            # 逐个音乐源并行搜索，支持进度反馈
+            sources = self.music_client.music_sources
+            total = len(sources)
+            all_results = {}
+            completed = 0
+
+            def search_single(source_name):
+                if self.isInterruptionRequested():
+                    return source_name, []
+                source_client = self.music_client.music_clients[source_name]
+                results = source_client.search(
+                    keyword=self.keyword,
+                    num_threadings=self.music_client.clients_threadings.get(
+                        source_name, 5
+                    ),
+                    request_overrides=self.music_client.requests_overrides.get(
+                        source_name
+                    ),
+                    rule=self.music_client.search_rules.get(source_name),
+                )
+                return source_name, results
+
+            max_workers = min(total, 10)
+            with ThreadPoolExecutor(max_workers=max_workers) as ex:
+                futures = {ex.submit(search_single, s): s for s in sources}
+                for future in as_completed(futures):
+                    if self.isInterruptionRequested():
+                        for f in futures:
+                            f.cancel()
+                        return
+                    try:
+                        source_name, results = future.result()
+                        all_results[source_name] = results
+                    except Exception:
+                        source_name = futures[future]
+                        all_results[source_name] = []
+                    completed += 1
+                    display_name = self.source_labels.get(source_name, source_name)
+                    self.progress.emit(display_name, completed, total)
+
             if not self.isInterruptionRequested():
-                self.finished.emit(results)
+                self.finished.emit(all_results)
         except Exception as e:
             if not self.isInterruptionRequested():
                 self.error.emit(str(e))
@@ -299,7 +344,7 @@ class SimpleProgressDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(title)
         self._cancellable = cancellable
-        self.setFixedSize(360, 130 if not cancellable else 170)
+        self.setFixedSize(380, 130 if not cancellable else 180)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
         self.setStyleSheet("""
@@ -312,12 +357,12 @@ class SimpleProgressDialog(QDialog):
             )
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(10)
+        layout.setSpacing(8)
 
-        label = QLabel(message)
-        label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        label.setStyleSheet("font-size: 11pt; color: #1f2937; font-weight: bold;")
-        layout.addWidget(label)
+        self._label = QLabel(message)
+        self._label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._label.setStyleSheet("font-size: 11pt; color: #1f2937; font-weight: bold;")
+        layout.addWidget(self._label)
 
         if save_dir:
             dir_label = QLabel(f"保存到：{save_dir}")
@@ -326,13 +371,19 @@ class SimpleProgressDialog(QDialog):
             dir_label.setWordWrap(True)
             layout.addWidget(dir_label)
 
-        progress = QProgressBar()
-        progress.setRange(0, 0)
-        progress.setStyleSheet("""
+        self._progress = QProgressBar()
+        self._progress.setRange(0, 0)
+        self._progress.setStyleSheet("""
             QProgressBar { border: none; border-radius: 4px; background-color: #f3f4f6; height: 6px; }
             QProgressBar::chunk { background-color: #0078d4; border-radius: 4px; }
         """)
-        layout.addWidget(progress)
+        layout.addWidget(self._progress)
+
+        self._detail_label = QLabel("")
+        self._detail_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._detail_label.setStyleSheet("font-size: 9pt; color: #9ca3af;")
+        self._detail_label.setVisible(False)
+        layout.addWidget(self._detail_label)
 
         if cancellable:
             self._btn_cancel = QPushButton("停止搜索")
@@ -346,6 +397,14 @@ class SimpleProgressDialog(QDialog):
             """)
             self._btn_cancel.clicked.connect(self._on_cancel)
             layout.addWidget(self._btn_cancel, alignment=Qt.AlignmentFlag.AlignCenter)
+
+    def set_progress(self, source_name: str, completed: int, total: int):
+        """切换到确定模式并更新每个音乐源的搜索进度。"""
+        self._progress.setRange(0, total)
+        self._progress.setValue(completed)
+        self._label.setText(f"正在搜索 {source_name} ...")
+        self._detail_label.setText(f"已完成 {completed} / {total} 个音乐源")
+        self._detail_label.setVisible(True)
 
     def _on_cancel(self):
         if self._cancellable:
@@ -1101,8 +1160,14 @@ class MusicDownloader(QMainWindow):
         dlg.show()
 
         self.search_thread = SearchThread(
-            self.music_client, keyword, self.search_mode.currentText()
+            self.music_client,
+            keyword,
+            self.search_mode.currentText(),
+            source_labels=self.source_map_en_to_cn,
         )
+
+        def on_progress(source_name, completed, total):
+            dlg.set_progress(source_name, completed, total)
 
         def on_finished(results):
             dlg.accept()
@@ -1121,6 +1186,10 @@ class MusicDownloader(QMainWindow):
             self.search_thread.requestInterruption()
             # 断开信号连接，避免线程结束后仍触发回调
             try:
+                self.search_thread.progress.disconnect(on_progress)
+            except Exception:
+                pass
+            try:
                 self.search_thread.finished.disconnect(on_finished)
             except Exception:
                 pass
@@ -1133,6 +1202,7 @@ class MusicDownloader(QMainWindow):
             self.btn_search.setText("🔍 立即搜索")
 
         dlg.cancelled.connect(on_cancel)
+        self.search_thread.progress.connect(on_progress)
         self.search_thread.finished.connect(on_finished)
         self.search_thread.error.connect(on_error)
         self.search_thread.start()
