@@ -1,6 +1,7 @@
 import sys
 import os
 import re
+import json
 import shutil
 import requests
 from PySide6.QtWidgets import (
@@ -510,6 +511,12 @@ class MusicDownloader(QMainWindow):
 
         self.auto_download_after_search = False
 
+        # 搜索历史
+        self.max_history = 30
+        self.history_file = os.path.join(self.current_dir, "search_history.json")
+        self.search_history = []
+        self._load_search_history()
+
         central = QWidget()
         central.setObjectName("CentralWidget")
         self.setCentralWidget(central)
@@ -559,6 +566,57 @@ class MusicDownloader(QMainWindow):
         QScrollBar::handle:vertical:hover { background: #9ca3af; }
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0px; }
         """
+
+    # ── 搜索历史 ──────────────────────────────────────────────
+    def _load_search_history(self):
+        try:
+            if os.path.exists(self.history_file):
+                with open(self.history_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                self.search_history = data if isinstance(data, list) else []
+            else:
+                self.search_history = []
+        except Exception:
+            self.search_history = []
+
+    def _save_search_history(self):
+        try:
+            with open(self.history_file, "w", encoding="utf-8") as f:
+                json.dump(self.search_history, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def _add_to_search_history(self, keyword):
+        keyword = keyword.strip()
+        if not keyword:
+            return
+        if keyword in self.search_history:
+            self.search_history.remove(keyword)
+        self.search_history.insert(0, keyword)
+        if len(self.search_history) > self.max_history:
+            self.search_history = self.search_history[: self.max_history]
+        self._refresh_history_combo()
+        self._save_search_history()
+
+    def _refresh_history_combo(self):
+        current = self.search_edit.currentText()
+        self.search_edit.blockSignals(True)
+        self.search_edit.clear()
+        self.search_edit.addItems(self.search_history)
+        self.search_edit.setCurrentText(current)
+        self.search_edit.blockSignals(False)
+
+    def _clear_search_history(self):
+        self.search_history = []
+        self.search_edit.clear()
+        self._save_search_history()
+
+    def _on_history_context_menu(self, pos):
+        menu = QMenu(self)
+        clear_action = menu.addAction("🗑 清除搜索历史")
+        action = menu.exec_(self.search_edit.mapToGlobal(pos))
+        if action == clear_action:
+            self._clear_search_history()
 
     def setup_top(self, parent_layout):
         layout = QVBoxLayout()
@@ -610,11 +668,24 @@ class MusicDownloader(QMainWindow):
         self.search_mode.addItems(["搜索歌曲", "解析歌单链接"])
         self.search_mode.setFixedWidth(130)
 
-        self.search_edit = QLineEdit()
-        self.search_edit.setPlaceholderText(
+        self.search_edit = QComboBox()
+        self.search_edit.setEditable(True)
+        self.search_edit.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.search_edit.setMinimumWidth(260)
+        self.search_edit.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
+        self.search_edit.lineEdit().setPlaceholderText(
             "请输入关键词或输入歌单链接，按回车键也可搜索..."
         )
-        self.search_edit.returnPressed.connect(self.on_search)
+        self.search_edit.lineEdit().returnPressed.connect(self.on_search)
+        # 搜索历史下拉框右键菜单
+        self.search_edit.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.search_edit.customContextMenuRequested.connect(
+            self._on_history_context_menu
+        )
+        # 初始化历史列表
+        self._refresh_history_combo()
 
         self.btn_search = QPushButton("🔍 立即搜索")
         self.btn_search.setObjectName("SearchBtn")
@@ -1007,7 +1078,7 @@ class MusicDownloader(QMainWindow):
         return songs
 
     def on_search(self):
-        keyword = self.search_edit.text().strip()
+        keyword = self.search_edit.currentText().strip()
         if not keyword:
             QMessageBox.warning(self, "提示", "请输入你要搜索的关键词！")
             return
@@ -1037,6 +1108,7 @@ class MusicDownloader(QMainWindow):
             dlg.accept()
             self.btn_search.setEnabled(True)
             self.btn_search.setText("🔍 立即搜索")
+            self._add_to_search_history(keyword)
             self.load_table_with_results(results)
 
         def on_error(error_msg):
