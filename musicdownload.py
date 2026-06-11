@@ -210,9 +210,11 @@ class SearchThread(QThread):
                 results = self.music_client.parseplaylist(self.keyword)
                 if not isinstance(results, dict):
                     results = {"歌单": results}
-            self.finished.emit(results)
+            if not self.isInterruptionRequested():
+                self.finished.emit(results)
         except Exception as e:
-            self.error.emit(str(e))
+            if not self.isInterruptionRequested():
+                self.error.emit(str(e))
 
 
 class DownloadThread(QThread):
@@ -290,10 +292,13 @@ class DownloadThread(QThread):
 
 
 class SimpleProgressDialog(QDialog):
-    def __init__(self, title, message, save_dir=None, parent=None):
+    cancelled = Signal()
+
+    def __init__(self, title, message, save_dir=None, parent=None, cancellable=False):
         super().__init__(parent)
         self.setWindowTitle(title)
-        self.setFixedSize(360, 130)
+        self._cancellable = cancellable
+        self.setFixedSize(360, 130 if not cancellable else 170)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Dialog)
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
         self.setStyleSheet("""
@@ -327,6 +332,25 @@ class SimpleProgressDialog(QDialog):
             QProgressBar::chunk { background-color: #0078d4; border-radius: 4px; }
         """)
         layout.addWidget(progress)
+
+        if cancellable:
+            self._btn_cancel = QPushButton("停止搜索")
+            self._btn_cancel.setStyleSheet("""
+                QPushButton {
+                    background-color: #ef4444; color: white; border: none;
+                    border-radius: 6px; padding: 6px 16px; font-size: 10pt; font-weight: bold;
+                }
+                QPushButton:hover { background-color: #dc2626; }
+                QPushButton:pressed { background-color: #b91c1c; }
+            """)
+            self._btn_cancel.clicked.connect(self._on_cancel)
+            layout.addWidget(self._btn_cancel, alignment=Qt.AlignmentFlag.AlignCenter)
+
+    def _on_cancel(self):
+        if self._cancellable:
+            self._btn_cancel.setEnabled(False)
+            self._btn_cancel.setText("正在停止...")
+        self.cancelled.emit()
 
 
 class FlowLayout(QLayout):
@@ -988,6 +1012,10 @@ class MusicDownloader(QMainWindow):
             QMessageBox.warning(self, "提示", "请输入你要搜索的关键词！")
             return
 
+        # 如果上一次搜索线程仍在运行，先中断它
+        if hasattr(self, 'search_thread') and self.search_thread.isRunning():
+            self.search_thread.requestInterruption()
+
         self.music_client = self.init_music_client()
         if not self.music_client:
             return
@@ -997,7 +1025,7 @@ class MusicDownloader(QMainWindow):
         self.btn_search.setText("搜索中...")
 
         dlg = SimpleProgressDialog(
-            "🔍 搜索中", "正在全网搜罗音乐，请稍候...", None, self
+            "🔍 搜索中", "正在全网搜罗音乐，请稍候...", None, self, cancellable=True
         )
         dlg.show()
 
@@ -1017,6 +1045,22 @@ class MusicDownloader(QMainWindow):
             self.btn_search.setText("🔍 立即搜索")
             QMessageBox.critical(self, "错误", f"搜索失败：{error_msg}")
 
+        def on_cancel():
+            self.search_thread.requestInterruption()
+            # 断开信号连接，避免线程结束后仍触发回调
+            try:
+                self.search_thread.finished.disconnect(on_finished)
+            except Exception:
+                pass
+            try:
+                self.search_thread.error.disconnect(on_error)
+            except Exception:
+                pass
+            dlg.accept()
+            self.btn_search.setEnabled(True)
+            self.btn_search.setText("🔍 立即搜索")
+
+        dlg.cancelled.connect(on_cancel)
         self.search_thread.finished.connect(on_finished)
         self.search_thread.error.connect(on_error)
         self.search_thread.start()
